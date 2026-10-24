@@ -27,6 +27,10 @@ const { AudienceEngagementService } = require('./utils/audience-engagement-servi
 const { GrowthExperimentService } = require('./utils/growth-experiment-service');
 const { AITextService } = require('./utils/ai-text-service');
 const { DiscoverabilityService } = require('./utils/discoverability-service');
+const { ProductionOrchestrator } = require('./agents/production-orchestrator');
+const { ComfyUIClient } = require('./utils/comfyui-client');
+const { WorkflowRegistry } = require('./utils/workflow-registry');
+const { AIPlanner } = require('./utils/ai-planner');
 const { version } = require('./package.json');
 const chalk = require('chalk');
 
@@ -53,6 +57,9 @@ class YouTubeAutomationAgent {
     this.scenes = null;
     this.shorts = null;
     this.engagement = null;
+    this.comfyClient = new ComfyUIClient();
+    this.workflowRegistry = new WorkflowRegistry();
+    this.productionOrchestrator = null;
     this.experiments = null;
     this.discoverability = null;
     this.setupRequired = false;
@@ -93,6 +100,22 @@ class YouTubeAutomationAgent {
       this.credentials = new CredentialManager();
       const credentialsValid = await this.credentials.validateAll();
       this.readiness = new ProductionReadinessService(this.db, this.credentials);
+      this.productionOrchestrator = new ProductionOrchestrator({
+        db: this.db,
+        comfyClient: this.comfyClient,
+        workflowRegistry: this.workflowRegistry,
+        aiPlanner: new AIPlanner(this.credentials?.credentials || {})
+      });
+      await this.productionOrchestrator.initialize();
+      if (this.credentials?.tokens?.youtube) {
+        try {
+          const { PublishingSchedulingAgent } = require('./agents/publishing-scheduling-agent');
+          this.agents.publishing = new PublishingSchedulingAgent(this.db, this.credentials);
+          await this.agents.publishing.initialize();
+        } catch (_pubErr) {
+          this.logger.warn('Publishing agent standby: ' + _pubErr.message);
+        }
+      }
       
       if (!credentialsValid) {
         console.log(chalk.yellow('\n⚠️  Some credentials are missing or invalid.'));
@@ -483,6 +506,7 @@ class YouTubeAutomationAgent {
     });
 
     this.setupOperatorAPI();
+    this.setupStudioAPI();
   }
 
   setupOperatorAPI() {
@@ -1869,6 +1893,155 @@ class YouTubeAutomationAgent {
       }
     });
   }
+
+  setupStudioAPI() {
+    const protect = this.requireAPIKey();
+
+    this.app.get('/api/studio/status', async (_req, res) => {
+      try {
+        const comfyAvailable = await this.comfyClient.isAvailable();
+        let stats = null;
+        let vramInfo = null;
+        if (comfyAvailable) {
+          stats = await this.comfyClient.getSystemStats().catch(() => null);
+          const dev = stats?.devices?.[0];
+          if (dev) {
+            vramInfo = {
+              name: dev.name,
+              totalGb: Math.round((dev.vram_total / 1e9) * 100) / 100,
+              freeGb: Math.round((dev.vram_free / 1e9) * 100) / 100
+            };
+          }
+        }
+        const workflows = this.workflowRegistry.getWorkflows();
+        const verifiedWorkflows = await Promise.all(
+          workflows.map(wf => this.workflowRegistry.verifyWorkflow(wf.id, this.comfyClient))
+        );
+        res.json({
+          success: true,
+          comfyAvailable,
+          comfyUrl: this.comfyClient.baseUrl,
+          vram: vramInfo,
+          workflows: verifiedWorkflows,
+          hasAITextKey: Boolean(this.productionOrchestrator?.aiPlanner?.hasApiKey()),
+          youtubeConnected: Boolean(this.credentials?.tokens?.youtube)
+        });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.get('/api/studio/jobs', async (req, res) => {
+      try {
+        const limit = parseInt(req.query.limit || '30', 10);
+        const rows = await this.db.getAllRows(
+          'SELECT id, topic, style, length, status, stage, progress, production_id, title, error, details, created_at, updated_at FROM generation_jobs ORDER BY created_at DESC LIMIT ?',
+          [limit]
+        );
+        const jobs = rows.map(r => ({
+          ...r,
+          details: JSON.parse(r.details || '{}')
+        }));
+        res.json({ success: true, jobs });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.get('/api/studio/jobs/:id', async (req, res) => {
+      try {
+        const job = await this.db.getGenerationJob(req.params.id);
+        if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
+        const scenes = await this.db.listProductionScenes(req.params.id);
+        const manifestPath = path.join(this.productionOrchestrator.getJobDir(req.params.id), 'reports', 'generation_manifest.json');
+        let manifest = null;
+        if (require('fs').existsSync(manifestPath)) {
+          manifest = JSON.parse(require('fs').readFileSync(manifestPath, 'utf8'));
+        }
+        res.json({ success: true, job, scenes, manifest });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.post('/api/studio/jobs/create', protect, async (req, res) => {
+      try {
+        const job = await this.productionOrchestrator.createJob(req.body);
+        res.status(201).json({ success: true, job });
+      } catch (err) {
+        res.status(400).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.post('/api/studio/jobs/:id/plan', protect, async (req, res) => {
+      try {
+        const result = await this.productionOrchestrator.planJob(req.params.id, req.body);
+        res.json(result);
+      } catch (err) {
+        res.status(err.code === 'GEMINI_API_KEY_REQUIRED' ? 428 : 500).json({
+          success: false,
+          error: err.message,
+          code: err.code
+        });
+      }
+    });
+
+    this.app.post('/api/studio/jobs/:id/generate', protect, async (req, res) => {
+      try {
+        this.productionOrchestrator.startGeneration(req.params.id, req.body).catch(err => {
+          this.logger.error('Background generation failed for ' + req.params.id + ':', err);
+        });
+        res.status(202).json({ success: true, message: 'Production generation started.', jobId: req.params.id });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.post('/api/studio/jobs/:id/cancel', protect, async (req, res) => {
+      try {
+        const result = await this.productionOrchestrator.cancelJob(req.params.id);
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.post('/api/studio/jobs/:id/approve-publish', protect, async (req, res) => {
+      try {
+        if (!this.agents.publishing) {
+          const { PublishingSchedulingAgent } = require('./agents/publishing-scheduling-agent');
+          this.agents.publishing = new PublishingSchedulingAgent(this.db, this.credentials);
+          await this.agents.publishing.initialize();
+        }
+        const result = await this.productionOrchestrator.approveAndPublish(req.params.id, this.agents.publishing);
+        res.json(result);
+      } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.get('/api/studio/jobs/:id/asset/:type', async (req, res) => {
+      try {
+        const jobDir = this.productionOrchestrator.getJobDir(req.params.id);
+        let targetPath = null;
+        if (req.params.type === 'master') {
+          targetPath = path.join(jobDir, 'final', 'master_final.mp4');
+        } else if (req.params.type === 'thumbnail') {
+          targetPath = path.join(jobDir, 'thumbnails', 'thumbnail_default.jpg');
+        } else if (req.params.type.startsWith('scene-')) {
+          const sIdx = req.params.type.replace('scene-', '');
+          targetPath = path.join(jobDir, 'scenes', 'segment_' + sIdx.padStart(2, '0') + '_trimmed.mp4');
+        }
+        if (!targetPath || !require('fs').existsSync(targetPath)) {
+          return res.status(404).json({ error: 'Asset not found' });
+        }
+        return res.sendFile(path.resolve(targetPath));
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    });
+  }
+
 }
 
 // Start the agent

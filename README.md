@@ -18,6 +18,7 @@ It researches topics, writes scripts, generates narration and visuals, assembles
 - **Real output only.** Simulated or placeholder media is clearly marked and can never be approved or uploaded.
 - **Self-hosted.** Your keys, media, and channel data stay on your machine.
 - **Learns from evidence, with your sign-off.** Lessons from analytics, retention curves, and comments shape future videos only after you approve them.
+- **Local AI Video Diffusion (Prompt Studio & ComfyUI).** Full local GPU diffusion using MiniMax H3 W6A8, 8-step Turbo LoRA, and NVFP4 text encoders. Bundled production workflows in workflows/ enable multi-scene chaining with terminal-frame continuity and 1080p FFmpeg normalization with zero cloud API fees.
 - **Your choice of providers.** Eight text providers or OpenRouter, five AI video providers, or free local slideshow rendering.
 
 ## Quick start

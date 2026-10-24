@@ -23,6 +23,7 @@
       </a>
       <p class="sidebar-label" aria-hidden="true">Workspace</p>
       <nav aria-label="Main navigation">
+        <button class="nav-item" data-view="studio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg> Prompt Studio</button>
         <button class="nav-item active" data-view="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7.5" height="9.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.5"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.5"/><rect x="3" y="15.5" width="7.5" height="5.5" rx="1.5"/></svg> Overview</button>
         <button class="nav-item" data-view="operator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/></svg> Autonomous operator</button>
         <button class="nav-item" data-view="pipeline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M4 12h16M4 18h7"/><circle cx="17.5" cy="6" r="2"/><circle cx="14.5" cy="18" r="2"/></svg> Pipeline <b id="review-badge" class="badge hidden">0</b></button>
@@ -52,6 +53,212 @@
 
       <div id="loading" class="loading-bar"></div>
       <div id="toast" class="toast hidden" role="status"></div>
+
+      
+      <section id="studio-view" class="view">
+        <div class="studio-status-banner">
+          <div class="studio-status-item">
+            <span class="studio-dot online" id="studio-comfy-dot"></span>
+            <div><span>ComfyUI Server:</span> <strong id="studio-comfy-status">Checking...</strong></div>
+          </div>
+          <div class="studio-status-item">
+            <div><span>Active Workflow:</span> <strong id="studio-workflow-name">MiniMax H3 Turbo Local</strong></div>
+          </div>
+          <div class="studio-status-item">
+            <div><span>Hardware:</span> <strong>NVIDIA RTX 4070 (12GB VRAM)</strong></div>
+          </div>
+          <div class="studio-status-item">
+            <div><span>AI Planner:</span> <strong id="studio-ai-status">Gemini (Template Fallback Active)</strong></div>
+          </div>
+          <div class="studio-status-item" style="margin-left: auto;">
+            <button type="button" class="button secondary small" id="studio-refresh-btn">🔄 Refresh Studio</button>
+          </div>
+        </div>
+
+        <div class="studio-layout">
+          <!-- Left: Production Creation Form -->
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">PROMPT-TO-VIDEO PRODUCTION</p>
+                <h2>Create AI Video</h2>
+              </div>
+            </div>
+
+            <form id="studio-create-form" class="studio-form-grid">
+              <label class="full-col">
+                <span>Main Video Prompt / Idea *</span>
+                <textarea name="prompt" id="studio-prompt-input" rows="4" required placeholder="E.g., Cinematic 4K aerial flyover and interior sanctum exploration of an ancient Dravidian stone temple at dawn, golden hour light filtering through gopuram corridors, photorealistic ancient architecture..."></textarea>
+              </label>
+
+              <label>
+                <span>Format</span>
+                <select name="format" id="studio-format-input">
+                  <option value="cinematic" selected>Cinematic Epic</option>
+                  <option value="documentary">Documentary</option>
+                  <option value="historical_epic">Historical Epic</option>
+                  <option value="explainer">Explainer / Educational</option>
+                  <option value="ambient_meditation">Ambient / Relaxation</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Target Duration</span>
+                <select name="duration" id="studio-duration-input">
+                  <option value="10" selected>10 Seconds (2 scenes - Fast Test)</option>
+                  <option value="15">15 Seconds (3 scenes)</option>
+                  <option value="30">30 Seconds (6 scenes)</option>
+                  <option value="60">60 Seconds (12 scenes)</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Aspect Ratio</span>
+                <select name="aspectRatio" id="studio-aspect-input">
+                  <option value="16:9" selected>16:9 Landscape (YouTube Standard)</option>
+                  <option value="9:16">9:16 Vertical (Shorts)</option>
+                  <option value="1:1">1:1 Square</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Resolution & FPS</span>
+                <select name="resolution" id="studio-res-input">
+                  <option value="1080p" selected>1080p Full HD (24 fps cinematic)</option>
+                  <option value="720p">720p HD (24 fps)</option>
+                </select>
+              </label>
+
+              <label class="full-col">
+                <span>Visual Style & Lighting</span>
+                <input type="text" name="style" id="studio-style-input" value="Photorealistic cinematic 8k, golden hour volumetric lighting, intricate ancient stone carvings, 35mm film grain" placeholder="Visual style keywords...">
+              </label>
+
+              <label class="full-col">
+                <span>Narration Voice & Tone</span>
+                <input type="text" name="voice" id="studio-voice-input" value="Deep authoritative documentary narrator, slow cadence, contemplative" placeholder="Voice preferences...">
+              </label>
+
+              <label class="full-col">
+                <span>Music & Sound Design</span>
+                <input type="text" name="music" id="studio-music-input" value="Ancient brass temple bells, ambient wind, deep cinematic bass drone, subtle flute" placeholder="Audio atmosphere...">
+              </label>
+
+              <label class="full-col">
+                <span>Workflow Engine</span>
+                <select name="workflowId" id="studio-workflow-select">
+                  <option value="minimax_h3_turbo_local" selected>MiniMax H3 Turbo Local (8-step Fast W6A8 GPU)</option>
+                </select>
+              </label>
+
+              <div class="full-col" style="display: flex; gap: 12px; margin-top: 10px;">
+                <button type="submit" class="button primary" id="studio-submit-btn" style="flex: 2;">✨ Generate Full Video</button>
+                <button type="button" class="button secondary" id="studio-plan-only-btn" style="flex: 1;">📝 Plan Only</button>
+              </div>
+            </form>
+          </article>
+
+          <!-- Right: Active Job Inspector -->
+          <article class="panel" id="studio-inspector-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow" id="studio-job-eyebrow">PRODUCTION INSPECTOR</p>
+                <h2 id="studio-job-title">No Active Production Selected</h2>
+              </div>
+              <div id="studio-job-status-badge"></div>
+            </div>
+
+            <!-- Stepper Progress Bar -->
+            <div class="studio-stepper" id="studio-stepper">
+              <div class="studio-step" data-step="draft">1. Draft</div>
+              <div class="studio-step" data-step="planning">2. AI Planning</div>
+              <div class="studio-step" data-step="generating_scenes">3. ComfyUI Inference</div>
+              <div class="studio-step" data-step="assembling">4. FFmpeg Assembly</div>
+              <div class="studio-step" data-step="validating">5. Quality Check</div>
+              <div class="studio-step" data-step="awaiting_approval">6. Ready for Review</div>
+              <div class="studio-step" data-step="uploaded">7. YouTube Published</div>
+            </div>
+
+            <!-- Video Player / Monitor -->
+            <div class="studio-monitor-player" id="studio-monitor">
+              <div class="studio-player-placeholder" id="studio-player-empty">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+                <span>Select a production job or start a new generation</span>
+              </div>
+              <video id="studio-video-player" controls preload="metadata" style="display: none;"></video>
+            </div>
+
+            <!-- Current Stage Details & Progress -->
+            <div id="studio-progress-container" style="display: none; margin-bottom: 16px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px;">
+                <span id="studio-stage-label" style="font-weight: 600; color: var(--amber);">Generating Scenes...</span>
+                <span id="studio-stage-percent" style="font-family: var(--font-mono);">0%</span>
+              </div>
+              <div class="progress" style="height: 6px;"><i id="studio-progress-bar" style="width: 0%;"></i></div>
+              <div id="studio-job-actions" style="margin-top: 12px; display: flex; gap: 10px;">
+                <button type="button" class="button secondary small" id="studio-cancel-job-btn">Cancel Job</button>
+              </div>
+            </div>
+
+            <!-- YouTube Metadata Preview & Approval Section -->
+            <div id="studio-approval-section" style="display: none;">
+              <div class="studio-meta-box">
+                <p class="eyebrow" style="margin-bottom: 4px;">YOUTUBE PACKAGING</p>
+                <strong id="studio-yt-title">Title</strong>
+                <p id="studio-yt-desc">Description</p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;" id="studio-yt-tags"></div>
+                <div style="font-size: 11px; color: var(--muted); font-family: var(--font-mono);" id="studio-yt-file"></div>
+              </div>
+
+              <div style="display: flex; gap: 12px; align-items: center; background: var(--surface-2); padding: 14px; border-radius: var(--radius-sm); border: 1px solid var(--line);">
+                <label style="flex: 1; margin: 0;">
+                  <span style="font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px;">Publishing Privacy</span>
+                  <select id="studio-privacy-select" style="padding: 6px 10px;">
+                    <option value="private" selected>Private (Safest - Default)</option>
+                    <option value="unlisted">Unlisted</option>
+                    <option value="public">Public</option>
+                  </select>
+                </label>
+                <button type="button" class="button primary" id="studio-approve-upload-btn" style="flex: 2; height: 38px;">🚀 Approve & Upload to YouTube</button>
+              </div>
+            </div>
+
+            <!-- Scene Timeline Breakdown -->
+            <div id="studio-scenes-container" style="margin-top: 20px;">
+              <h3 style="font-size: 14px; margin-bottom: 10px;">Timeline Scenes</h3>
+              <div class="studio-scene-timeline" id="studio-scene-list"></div>
+            </div>
+          </article>
+        </div>
+
+        <!-- Persistent Jobs History Table -->
+        <article class="panel" style="margin-top: 24px;">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">PRODUCTION REPOSITORY</p>
+              <h2>Persistent Jobs History</h2>
+            </div>
+          </div>
+          <div style="overflow-x: auto;">
+            <table class="studio-jobs-table">
+              <thead>
+                <tr>
+                  <th>Job ID</th>
+                  <th>Topic / Prompt</th>
+                  <th>Duration</th>
+                  <th>Workflow</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="studio-jobs-tbody">
+                <tr><td colspan="7" style="text-align: center; color: var(--muted);">Loading production jobs...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
 
       <section id="overview-view" class="view active">
         <div id="setup-banner" class="setup-banner hidden"><div><strong>Finish setup to activate your agents</strong><p>The operator console is ready, but generation and publishing stay disabled until credentials are configured.</p></div><code>npm run walkthrough</code></div>

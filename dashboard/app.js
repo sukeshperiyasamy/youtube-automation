@@ -832,6 +832,7 @@ function switchView(view) {
   $$('.view').forEach(item => item.classList.toggle('active', item.id === `${view}-view`));
   const titles = {
     overview: ['OPERATOR OVERVIEW', 'Know what happens next.'],
+    studio: ['AI PROMPT VIDEO STUDIO', 'Prompt to local ComfyUI inference to YouTube.'],
     operator: ['AUTONOMOUS OPERATOR', 'Give YouTube Automation Agent the strategy.'],
     pipeline: ['CONTENT OPERATIONS', 'From idea to published.'],
     calendar: ['EDITORIAL PLANNING', 'Plan before you generate.'],
@@ -845,6 +846,7 @@ function switchView(view) {
   location.hash = view;
   // Loaded on demand rather than in the 8-second dashboard poll to spare API quota.
   if (view === 'analytics') loadChannelSnapshot();
+  if (view === 'studio') refreshStudio();
 }
 
 function selectOptions(options, selected) {
@@ -1671,7 +1673,7 @@ document.addEventListener('change', event => {
   }
 });
 
-$('#generate-button').addEventListener('click', () => $('#generate-dialog').showModal());
+$('#generate-button').addEventListener('click', () => switchView('studio'));
 $('#add-idea-button').addEventListener('click', () => $('#idea-dialog').showModal());
 $('#refresh-button').addEventListener('click', () => refreshDashboard());
 $('#channel-snapshot-refresh').addEventListener('click', () => loadChannelSnapshot(true));
@@ -1795,6 +1797,329 @@ $('#api-key-button').addEventListener('click', () => {
 });
 
 const initialView = location.hash.slice(1);
-if (['overview', 'operator', 'pipeline', 'calendar', 'analytics', 'engagement', 'readiness', 'settings'].includes(initialView)) switchView(initialView);
+if (['overview', 'operator', 'pipeline', 'calendar', 'analytics', 'engagement', 'readiness', 'settings', 'studio'].includes(initialView)) switchView(initialView);
 refreshDashboard();
 setInterval(() => refreshDashboard(true), 8000);
+
+
+/* ============================================================
+   AI PROMPT VIDEO STUDIO CONTROLLER
+   ============================================================ */
+const studioState = {
+  currentJobId: null,
+  pollTimer: null,
+  status: null,
+  jobs: []
+};
+
+async function refreshStudio(silent = false) {
+  try {
+    const [statusData, jobsData] = await Promise.all([
+      api('/api/studio/status').catch(() => null),
+      api('/api/studio/jobs').catch(() => ({ jobs: [] }))
+    ]);
+
+    if (statusData) {
+      studioState.status = statusData;
+      const comfy = statusData.comfyui || {};
+      const dot = $('#studio-comfy-dot');
+      const label = $('#studio-comfy-status');
+      if (dot && label) {
+        dot.className = `studio-dot ${comfy.available ? 'online' : 'offline'}`;
+        label.textContent = comfy.available ? `Online (${comfy.url})` : 'Offline (ComfyUI not reachable)';
+      }
+      if ($('#studio-ai-status')) {
+        $('#studio-ai-status').textContent = statusData.aiProvider?.name || 'Deterministic Template Fallback';
+      }
+    }
+
+    if (jobsData && Array.isArray(jobsData.jobs)) {
+      studioState.jobs = jobsData.jobs;
+      renderStudioJobsTable(jobsData.jobs);
+
+      // Default select the first job if none selected
+      if (!studioState.currentJobId && jobsData.jobs.length > 0) {
+        studioState.currentJobId = jobsData.jobs[0].id;
+      }
+    }
+
+    if (studioState.currentJobId) {
+      await loadStudioJobDetails(studioState.currentJobId);
+    }
+  } catch (error) {
+    if (!silent) console.error('Error refreshing studio:', error);
+  }
+}
+
+function renderStudioJobsTable(jobs) {
+  const tbody = $('#studio-jobs-tbody');
+  if (!tbody) return;
+
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--muted); padding: 24px;">No production jobs found. Enter a prompt above to create one.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = jobs.map(job => {
+    const isSelected = job.id === studioState.currentJobId;
+    const promptShort = escapeHTML((job.prompt || job.topic || '').slice(0, 60)) + ((job.prompt || '').length > 60 ? '...' : '');
+    return `
+      <tr class="${isSelected ? 'selected' : ''}" data-studio-select-job="${escapeHTML(job.id)}">
+        <td style="font-family: var(--font-mono); font-size: 11px;">${escapeHTML(job.id)}</td>
+        <td><strong>${promptShort}</strong></td>
+        <td>${escapeHTML(job.duration || 10)}s</td>
+        <td><small>${escapeHTML(job.workflow_id || 'minimax_h3_turbo_local')}</small></td>
+        <td>${statusChip(job.status)}</td>
+        <td><small>${timeAgo(job.created_at)}</small></td>
+        <td>
+          <button type="button" class="text-button" data-studio-select-job="${escapeHTML(job.id)}">Inspect</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function loadStudioJobDetails(jobId) {
+  try {
+    const res = await api(`/api/studio/jobs/${encodeURIComponent(jobId)}`);
+    const job = res.job;
+    if (!job) return;
+
+    $('#studio-job-eyebrow').textContent = `PRODUCTION JOB: ${job.id}`;
+    $('#studio-job-title').textContent = job.plan?.title || job.topic || job.prompt?.slice(0, 50) || 'Production Job';
+    $('#studio-job-status-badge').innerHTML = statusChip(job.status);
+
+    // Update stepper
+    const steps = ['draft', 'planning', 'generating_scenes', 'assembling', 'validating', 'awaiting_approval', 'uploaded'];
+    const currentStepIdx = steps.indexOf(job.status);
+    $$('.studio-step').forEach((el, idx) => {
+      const stepName = el.dataset.step;
+      el.classList.remove('active', 'completed');
+      if (job.status === stepName) {
+        el.classList.add('active');
+      } else if (currentStepIdx > idx || job.status === 'uploaded' || (job.status === 'awaiting_approval' && idx < 5)) {
+        el.classList.add('completed');
+      }
+    });
+
+    // Update video player
+    const emptyPlayer = $('#studio-player-empty');
+    const player = $('#studio-video-player');
+    if (job.finalVideo?.path || job.final_video_path) {
+      emptyPlayer.style.display = 'none';
+      player.style.display = 'block';
+      const videoSrc = `/api/studio/jobs/${encodeURIComponent(job.id)}/asset/final?t=${Date.now()}`;
+      if (player.src !== location.origin + videoSrc) {
+        player.src = videoSrc;
+      }
+    } else {
+      player.style.display = 'none';
+      emptyPlayer.style.display = 'flex';
+      emptyPlayer.querySelector('span').textContent = job.status === 'generating_scenes'
+        ? `Generating scenes with ComfyUI (${job.progress || 0}% complete)...`
+        : job.status === 'assembling'
+          ? 'Assembling final video with FFmpeg...'
+          : `Stage: ${label(job.status)}. Final video not ready.`;
+    }
+
+    // Progress container
+    const progressContainer = $('#studio-progress-container');
+    const isActive = ['planning', 'generating_scenes', 'assembling', 'validating'].includes(job.status);
+    if (isActive) {
+      progressContainer.style.display = 'block';
+      $('#studio-stage-label').textContent = `${label(job.stage || job.status)}...`;
+      $('#studio-stage-percent').textContent = `${job.progress || 0}%`;
+      $('#studio-progress-bar').style.width = `${job.progress || 0}%`;
+      $('#studio-cancel-job-btn').dataset.jobId = job.id;
+
+      if (!studioState.pollTimer) {
+        studioState.pollTimer = setInterval(() => {
+          if (ui.currentView === 'studio' && studioState.currentJobId) {
+            refreshStudio(true);
+          }
+        }, 3000);
+      }
+    } else {
+      progressContainer.style.display = 'none';
+      if (studioState.pollTimer) {
+        clearInterval(studioState.pollTimer);
+        studioState.pollTimer = null;
+      }
+    }
+
+    // YouTube Metadata & Approval Section
+    const approvalSection = $('#studio-approval-section');
+    if (job.status === 'awaiting_approval' || job.finalVideo?.path || job.final_video_path) {
+      approvalSection.style.display = 'block';
+      const metadata = job.plan?.youtube_metadata || job.metadata || {};
+      $('#studio-yt-title').textContent = metadata.title || job.plan?.title || 'Untitled Video';
+      $('#studio-yt-desc').textContent = metadata.description || 'No description generated.';
+      
+      const tagsContainer = $('#studio-yt-tags');
+      const tags = metadata.tags || [];
+      tagsContainer.innerHTML = tags.map(t => `<span class="badge">#${escapeHTML(t)}</span>`).join('');
+      
+      $('#studio-yt-file').textContent = `Master Output: ${job.finalVideo?.path || job.final_video_path || 'data/productions/' + job.id + '/final/'}`;
+      
+      const approveBtn = $('#studio-approve-upload-btn');
+      approveBtn.dataset.jobId = job.id;
+      if (job.status === 'uploaded') {
+        approveBtn.textContent = '✅ Already Published to YouTube';
+        approveBtn.disabled = true;
+      } else {
+        approveBtn.textContent = '🚀 Approve & Upload to YouTube';
+        approveBtn.disabled = false;
+      }
+    } else {
+      approvalSection.style.display = 'none';
+    }
+
+    // Render Scene List
+    const sceneContainer = $('#studio-scene-list');
+    const scenes = job.scenes || job.plan?.scenes || [];
+    if (!scenes.length) {
+      sceneContainer.innerHTML = '<div class="empty">No scenes planned yet. Click Generate Full Video or Plan Only to build the scene breakdown.</div>';
+    } else {
+      sceneContainer.innerHTML = scenes.map((s, idx) => {
+        const thumbUrl = `/api/studio/jobs/${encodeURIComponent(job.id)}/asset/thumbnail?sceneId=${encodeURIComponent(s.id || s.scene_id)}`;
+        return `
+          <div class="studio-scene-row">
+            <div class="studio-scene-thumb">
+              <img src="${thumbUrl}" alt="Scene ${idx + 1}" onerror="this.onerror=null;this.parentElement.innerHTML='<span style=\'font-size:10px;color:var(--muted);\'>Clip ${idx + 1}</span>';">
+            </div>
+            <div class="studio-scene-info">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <strong>Scene ${idx + 1}: ${escapeHTML(s.title || s.label || 'Clip ' + (idx + 1))}</strong>
+                <span style="font-family: var(--font-mono); font-size: 11px; color: var(--muted);">${s.duration || 5}s</span>
+              </div>
+              <p><strong>Prompt:</strong> ${escapeHTML(s.prompt || s.visual_prompt || '')}</p>
+              ${s.narration ? `<p><strong>Narration:</strong> <em>"${escapeHTML(s.narration)}"</em></p>` : ''}
+              <div class="studio-scene-tags">
+                <span>Motion: ${escapeHTML(s.camera_movement || 'Cinematic dolly')}</span>
+                <span>Seed: ${s.seed || 'Auto'}</span>
+                <span>Status: ${s.status || (job.status === 'awaiting_approval' ? 'completed' : 'pending')}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+  } catch (err) {
+    console.error('Failed to load job details:', err);
+  }
+}
+
+// Studio Event Bindings
+document.addEventListener('click', async event => {
+  // Job selection in table
+  const selectRow = event.target.closest('[data-studio-select-job]');
+  if (selectRow) {
+    const jobId = selectRow.dataset.studioSelectJob;
+    studioState.currentJobId = jobId;
+    renderStudioJobsTable(studioState.jobs);
+    await loadStudioJobDetails(jobId);
+    return;
+  }
+
+  // Refresh button
+  if (event.target.closest('#studio-refresh-btn')) {
+    await refreshStudio();
+    showToast('Studio status refreshed.');
+    return;
+  }
+
+  // Cancel job
+  const cancelBtn = event.target.closest('#studio-cancel-job-btn');
+  if (cancelBtn) {
+    const jobId = cancelBtn.dataset.jobId;
+    if (jobId && confirm('Cancel this production job?')) {
+      try {
+        await api(`/api/studio/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', body: '{}' });
+        showToast('Job cancellation requested.');
+        await refreshStudio();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    }
+    return;
+  }
+
+  // Approve & upload to YouTube
+  const approveBtn = event.target.closest('#studio-approve-upload-btn');
+  if (approveBtn) {
+    const jobId = approveBtn.dataset.jobId;
+    const privacy = $('#studio-privacy-select')?.value || 'private';
+    if (!jobId) return;
+
+    if (!confirm(`Are you sure you want to approve this video and queue it for upload to YouTube channel Ethereal Dreamscript / Sukesh Periyasamy as ${privacy.toUpperCase()}?`)) {
+      return;
+    }
+
+    try {
+      $('#loading').classList.add('active');
+      const result = await api(`/api/studio/jobs/${encodeURIComponent(jobId)}/approve-publish`, {
+        method: 'POST',
+        body: JSON.stringify({ privacy })
+      });
+      showToast('Video approved and scheduled for YouTube upload (Private)!');
+      await refreshStudio();
+      await refreshDashboard(true);
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      $('#loading').classList.remove('active');
+    }
+    return;
+  }
+
+  // Plan only button
+  if (event.target.closest('#studio-plan-only-btn')) {
+    const form = $('#studio-create-form');
+    if (!form.reportValidity()) return;
+    const formData = new FormData(form);
+    const body = Object.fromEntries(formData);
+    try {
+      $('#loading').classList.add('active');
+      const createRes = await api('/api/studio/jobs/create', { method: 'POST', body: JSON.stringify(body) });
+      const jobId = createRes.job.id;
+      showToast(`Draft job ${jobId} created. Generating AI plan...`);
+      await api(`/api/studio/jobs/${encodeURIComponent(jobId)}/plan`, { method: 'POST', body: '{}' });
+      studioState.currentJobId = jobId;
+      await refreshStudio();
+      showToast('AI Production plan generated successfully.');
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      $('#loading').classList.remove('active');
+    }
+    return;
+  }
+});
+
+// Studio form submit (Full Video Generation)
+document.addEventListener('submit', async event => {
+  if (event.target.matches('#studio-create-form')) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const body = Object.fromEntries(formData);
+
+    try {
+      $('#loading').classList.add('active');
+      const createRes = await api('/api/studio/jobs/create', { method: 'POST', body: JSON.stringify(body) });
+      const jobId = createRes.job.id;
+      studioState.currentJobId = jobId;
+      showToast(`Production job ${jobId} created. Starting full workflow...`);
+      
+      api(`/api/studio/jobs/${encodeURIComponent(jobId)}/generate`, { method: 'POST', body: '{}' }).catch(err => {
+        console.error('Generation async error:', err);
+      });
+
+      await refreshStudio();
+      switchView('studio');
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      $('#loading').classList.remove('active');
+    }
+  }
+});

@@ -10,6 +10,14 @@ yarn-error.log*
 .env.production
 config/credentials.json
 config/tokens.json
+config/token.json
+config/*token*.json
+token.json
+tokens.json
+config/token.json
+config/*token*.json
+token.json
+tokens.json
 config/*.key
 config/*.pem
 
@@ -90,3 +98,5 @@ data/thumbnails/
 
 # Claude worktrees
 .claude/worktrees/
+
+data/productions/

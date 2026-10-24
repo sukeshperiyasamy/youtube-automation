@@ -9,7 +9,7 @@
     "walkthrough": "node walkthrough.js",
     "growth:snapshot": "node scripts/growth/snapshot-github.js",
     "scheduler": "node schedules/daily-automation.js",
-    "test": "node test.js",
+    "test": "node test.js && node test-studio.js",
     "agent:strategy": "node agents/content-strategy-agent.js",
     "agent:script": "node agents/script-writer-agent.js",
     "agent:thumbnail": "node agents/thumbnail-designer-agent.js",
@@ -18,7 +18,8 @@
     "agent:publishing": "node agents/publishing-scheduling-agent.js",
     "agent:analytics": "node agents/analytics-optimization-agent.js",
     "credentials:setup": "node utils/credential-manager.js setup",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:studio": "node test-studio.js"
   },
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.0",

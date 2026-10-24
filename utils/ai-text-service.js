@@ -110,7 +110,7 @@ class AITextService {
     try {
       const { GoogleGenAI } = require('@google/genai');
       this.gemini = new GoogleGenAI({ apiKey });
-      this.model = model || GEMINI_DEFAULT_MODEL;
+      this.model = model || process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL;
       this.providerName = 'Google Gemini';
       this.logger.info(`Gemini initialized (model: ${this.model})`);
     } catch (error) {
