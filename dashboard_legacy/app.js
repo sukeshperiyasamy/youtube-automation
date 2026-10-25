@@ -862,10 +862,44 @@ function populateSettings(profile = {}, settings = {}, providers = []) {
       : selected?.available ? `${label(selected.id)} is configured (${selected.model}).` : `${label(videoMapping.videoProvider)} credentials are not configured.`;
 }
 
-function switchView(view) {
+const VALID_VIEWS = ['overview', 'studio', 'operator', 'pipeline', 'calendar', 'analytics', 'engagement', 'readiness', 'settings'];
+
+function closeMobileDrawer() {
+  const sidebar = $('.sidebar');
+  const toggle = $('#mobile-nav-toggle');
+  if (sidebar) sidebar.classList.remove('drawer-open');
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  const backdrop = $('#sidebar-backdrop');
+  if (backdrop) backdrop.classList.remove('active');
+}
+
+function openMobileDrawer() {
+  const sidebar = $('.sidebar');
+  const toggle = $('#mobile-nav-toggle');
+  if (sidebar) sidebar.classList.add('drawer-open');
+  if (toggle) toggle.setAttribute('aria-expanded', 'true');
+  const backdrop = $('#sidebar-backdrop');
+  if (backdrop) backdrop.classList.add('active');
+}
+
+function toggleMobileDrawer() {
+  const sidebar = $('.sidebar');
+  if (sidebar?.classList.contains('drawer-open')) {
+    closeMobileDrawer();
+  } else {
+    openMobileDrawer();
+  }
+}
+
+function switchView(view, force = false) {
+  if (!VALID_VIEWS.includes(view)) view = 'overview';
+
+  const isSameView = ui.currentView === view;
   ui.currentView = view;
+
   $$('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   $$('.view').forEach(item => item.classList.toggle('active', item.id === `${view}-view`));
+
   const titles = {
     overview: ['OPERATOR OVERVIEW', 'Know what happens next.'],
     studio: ['AI PROMPT VIDEO STUDIO', 'Prompt to local ComfyUI inference to YouTube.'],
@@ -877,9 +911,21 @@ function switchView(view) {
     readiness: ['PRODUCTION READINESS', 'Verify before autonomy runs.'],
     settings: ['CHANNEL GUARDRAILS', 'Make every agent sound like you.']
   };
-  $('#view-eyebrow').textContent = titles[view][0];
-  $('#view-title').textContent = titles[view][1];
-  location.hash = view;
+
+  const titleInfo = titles[view] || titles.overview;
+  const eyebrowEl = $('#view-eyebrow');
+  const titleEl = $('#view-title');
+  if (eyebrowEl) eyebrowEl.textContent = titleInfo[0];
+  if (titleEl) titleEl.textContent = titleInfo[1];
+
+  if (location.hash.replace(/^#/, '') !== view) {
+    location.hash = view;
+  }
+
+  closeMobileDrawer();
+
+  if (isSameView && !force) return;
+
   // Loaded on demand rather than in the 8-second dashboard poll to spare API quota.
   if (view === 'analytics') loadChannelSnapshot();
   if (view === 'studio') refreshStudio();
@@ -1833,8 +1879,40 @@ $('#api-key-button').addEventListener('click', () => {
   if (requestApiKey() !== null) showToast('Dashboard API key saved in this browser.');
 });
 
-const initialView = location.hash.slice(1);
-if (['overview', 'operator', 'pipeline', 'calendar', 'analytics', 'engagement', 'readiness', 'settings', 'studio'].includes(initialView)) switchView(initialView);
+// Listen for URL hash changes (browser back/forward & direct links)
+window.addEventListener('hashchange', () => {
+  const targetView = location.hash.replace(/^#/, '') || 'overview';
+  if (VALID_VIEWS.includes(targetView) && ui.currentView !== targetView) {
+    switchView(targetView);
+  }
+});
+
+// Mobile drawer controls
+document.addEventListener('click', event => {
+  if (event.target.closest('#mobile-nav-toggle')) {
+    event.preventDefault();
+    toggleMobileDrawer();
+    return;
+  }
+  if (event.target.closest('#sidebar-backdrop')) {
+    event.preventDefault();
+    closeMobileDrawer();
+    return;
+  }
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    closeMobileDrawer();
+  }
+});
+
+const initialView = location.hash.replace(/^#/, '') || 'overview';
+if (VALID_VIEWS.includes(initialView)) {
+  switchView(initialView, true);
+} else {
+  switchView('overview', true);
+}
 refreshDashboard();
 setInterval(() => refreshDashboard(true), 8000);
 
@@ -1916,6 +1994,77 @@ function renderStudioJobsTable(jobs) {
   }).join('');
 }
 
+
+async function triggerInstructionInterpretation() {
+  const promptInput = $('#studio-prompt-input');
+  const text = promptInput?.value?.trim();
+  if (!text) {
+    showToast('Please provide an instruction or video topic first.', 'error');
+    return;
+  }
+
+  const card = $('#studio-interpretation-card');
+  const badge = $('#studio-interpret-badge');
+  const topicsEl = $('#studio-interpret-topics');
+  const specsEl = $('#studio-interpret-specs');
+  const conflictsEl = $('#studio-interpret-conflicts');
+  const batchChoiceEl = $('#studio-batch-mode-choice');
+
+  try {
+    $('#loading').classList.add('active');
+    const res = await api('/api/studio/instruction/interpret', {
+      method: 'POST',
+      body: JSON.stringify({ instruction: text })
+    });
+
+    const interp = res.interpretation;
+    if (!interp || !interp.valid) {
+      showToast(interp?.error || 'Could not interpret instruction.', 'error');
+      return;
+    }
+
+    if (badge) badge.textContent = interp.isBatch ? `Batch (${interp.topicCount} Topics)` : 'Single Video';
+    if (topicsEl) {
+      topicsEl.innerHTML = `<strong>${interp.isBatch ? 'Recognized Topics:' : 'Topic:'}</strong> ` +
+        interp.topics.map(t => `<span class="badge" style="font-size: 11px; margin: 2px 4px 2px 0;">${escapeHTML(t)}</span>`).join('');
+    }
+
+    if (batchChoiceEl) {
+      batchChoiceEl.style.display = interp.isBatch ? 'block' : 'none';
+    }
+
+    if (specsEl) {
+      const s = interp.settings;
+      specsEl.innerHTML = `
+        <div><span>Target Duration:</span> <strong>${s.duration}s</strong></div>
+        <div><span>Resolution & Ratio:</span> <strong>${s.resolution} (${s.aspectRatio})</strong></div>
+        <div><span>Narration:</span> <strong>${s.narrationLanguage} (${s.narrationVoice})</strong></div>
+        <div><span>Audio Style:</span> <strong>${s.musicStyle}</strong></div>
+        <div><span>Publishing Policy:</span> <strong>${s.publishingPolicy === 'approval_required' ? 'Awaiting Human Approval' : 'Pre-authorized Auto'}</strong></div>
+        <div><span>Visibility:</span> <strong>${s.visibility}</strong></div>
+      `;
+    }
+
+    if (conflictsEl) {
+      if (interp.conflicts && interp.conflicts.length > 0) {
+        conflictsEl.style.display = 'block';
+        conflictsEl.innerHTML = '<strong>⚠️ Note:</strong> ' + interp.conflicts.map(c => escapeHTML(c.description)).join('<br>');
+      } else {
+        conflictsEl.style.display = 'none';
+      }
+    }
+
+    if (card) {
+      card.style.display = 'block';
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    $('#loading').classList.remove('active');
+  }
+}
+
 async function loadStudioJobDetails(jobId) {
   try {
     const res = await api(`/api/studio/jobs/${encodeURIComponent(jobId)}`);
@@ -1945,7 +2094,7 @@ async function loadStudioJobDetails(jobId) {
     if (job.finalVideo?.path || job.final_video_path) {
       emptyPlayer.style.display = 'none';
       player.style.display = 'block';
-      const videoSrc = `/api/studio/jobs/${encodeURIComponent(job.id)}/asset/final?t=${Date.now()}`;
+      const videoSrc = `/api/studio/jobs/${encodeURIComponent(job.id)}/asset/master?t=${Date.now()}`;
       if (player.src !== location.origin + videoSrc) {
         player.src = videoSrc;
       }
@@ -2011,6 +2160,66 @@ async function loadStudioJobDetails(jobId) {
       approvalSection.style.display = 'none';
     }
 
+
+    // Render Quality Gate Audit
+    const qPanel = $('#studio-quality-gate-panel');
+    if (qPanel && job.details?.qualityEval?.checks) {
+      qPanel.style.display = 'block';
+      const scoreBadge = $('#studio-quality-score-badge');
+      if (scoreBadge) scoreBadge.textContent = `Score: ${job.details.qualityEval.score}%`;
+      const checksList = $('#studio-quality-checks-list');
+      if (checksList) {
+        checksList.innerHTML = job.details.qualityEval.checks.map(c => `
+          <div class="studio-check-row">
+            <div class="studio-check-name">
+              <span class="${c.passed ? 'studio-check-pass' : 'studio-check-fail'}">${c.passed ? '✓' : '✗'}</span>
+              <span>${escapeHTML(c.name || c.id)}</span>
+            </div>
+            <div class="studio-check-status ${c.passed ? 'studio-check-pass' : 'studio-check-fail'}">
+              ${c.passed ? 'PASSED' : (c.blocking ? 'BLOCKING FAILURE' : 'WARNING')}
+            </div>
+          </div>
+          <div class="studio-check-msg">${escapeHTML(c.message || '')}</div>
+        `).join('');
+      }
+    } else if (qPanel) {
+      qPanel.style.display = 'none';
+    }
+
+    // Resume / Retry button state
+    const resumeBtn = $('#studio-resume-job-btn');
+    if (resumeBtn) {
+      if (['interrupted', 'failed'].includes(job.status)) {
+        resumeBtn.style.display = 'inline-flex';
+        resumeBtn.dataset.jobId = job.id;
+      } else {
+        resumeBtn.style.display = 'none';
+      }
+    }
+
+    // Batch Overview if part of a batch
+    const batchPanel = $('#studio-batch-panel');
+    if (batchPanel && job.details?.parentBatchId) {
+      api(`/api/studio/batches/${encodeURIComponent(job.details.parentBatchId)}`).then(bRes => {
+        if (bRes.childJobs && bRes.childJobs.length > 1) {
+          batchPanel.style.display = 'block';
+          const list = $('#studio-batch-jobs-list');
+          if (list) {
+            list.innerHTML = bRes.childJobs.map(cj => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line);">
+                <span style="cursor: pointer; ${cj.id === job.id ? 'font-weight: 600;' : ''}" data-studio-select-job="${cj.id}">
+                  ${cj.details?.batchIndex || 1}. ${escapeHTML(cj.topic || cj.id)}
+                </span>
+                <span class="badge" style="font-size: 10px;">${cj.status}</span>
+              </div>
+            `).join('');
+          }
+        }
+      }).catch(() => {});
+    } else if (batchPanel) {
+      batchPanel.style.display = 'none';
+    }
+
     // Render Scene List
     const sceneContainer = $('#studio-scene-list');
     const scenes = job.scenes || job.plan?.scenes || [];
@@ -2048,6 +2257,116 @@ async function loadStudioJobDetails(jobId) {
 
 // Studio Event Bindings
 document.addEventListener('click', async event => {
+
+  // Chip click handlers
+  const chip = event.target.closest('.studio-chip');
+  if (chip) {
+    const chipType = chip.dataset.chip;
+    const promptInput = $('#studio-prompt-input');
+    if (chipType === 'meenakshi') {
+      promptInput.value = 'Create a 60-second cinematic video about Meenakshi Amman Temple in Madurai. Use warm morning lighting, cinematic visuals, Tamil narration, cinematic background music, 1920x1080 resolution, 16:9 aspect ratio, 24 fps, and H.264 MP4 output. Write an engaging story, create coherent scenes, synchronize the narration and music, validate the final video, repair recoverable errors, and upload it to my YouTube channel after the configured approval requirements are met.';
+    } else if (chipType === 'sepsis') {
+      promptInput.value = 'Create a one-minute video about neonatal sepsis awareness for healthcare professionals. Use clear documentary pacing, medical clarity, and 16:9 1080p output.';
+    } else if (chipType === 'batch_tech') {
+      promptInput.value = "Topics:\n- Quantum Computing Fundamentals\n- Neural Network Backpropagation\n- CRISPR Gene Editing\nCreate separate videos of 45 seconds each with English narration and upload after approval.";
+    }
+    triggerInstructionInterpretation();
+    return;
+  }
+
+  // Toggle Advanced Settings
+  if (event.target.closest('#studio-toggle-advanced-btn')) {
+    const advPanel = $('#studio-advanced-panel');
+    if (advPanel) {
+      const isHidden = advPanel.style.display === 'none' || !advPanel.style.display;
+      advPanel.style.display = isHidden ? 'block' : 'none';
+      event.target.closest('#studio-toggle-advanced-btn').textContent = isHidden ? '▲ Hide Advanced' : '⚙️ Advanced';
+    }
+    return;
+  }
+
+  // Interpret & Create Button
+  if (event.target.closest('#studio-interpret-btn')) {
+    await triggerInstructionInterpretation();
+    return;
+  }
+
+  // Edit Plan button
+  if (event.target.closest('#studio-edit-plan-btn')) {
+    const card = $('#studio-interpretation-card');
+    if (card) card.style.display = 'none';
+    $('#studio-prompt-input')?.focus();
+    return;
+  }
+
+  // Confirm Plan & Start Production Button
+  if (event.target.closest('#studio-confirm-plan-btn')) {
+    const promptInput = $('#studio-prompt-input');
+    const instruction = promptInput?.value?.trim();
+    if (!instruction) {
+      showToast('Please enter production instructions.', 'error');
+      return;
+    }
+
+    const batchRadio = document.querySelector('input[name="batchModeRadio"]:checked');
+    const batchMode = batchRadio?.value || 'separate_videos';
+    const policy = $('#studio-policy-input')?.value || 'approval_required';
+
+    try {
+      $('#loading').classList.add('active');
+      const res = await api('/api/studio/production/create-from-instruction', {
+        method: 'POST',
+        body: JSON.stringify({
+          instruction,
+          autoStart: true,
+          options: {
+            batchMode,
+            publishingPolicy: policy
+          }
+        })
+      });
+
+      const result = res.result;
+      if (result.isBatch) {
+        showToast(`Batch created with ${result.childJobs.length} production jobs! Starting background generation...`);
+        studioState.currentJobId = result.childJobs[0].id;
+      } else if (result.job) {
+        showToast(`Production job ${result.job.id} created! Starting background generation...`);
+        studioState.currentJobId = result.job.id;
+      }
+
+      const card = $('#studio-interpretation-card');
+      if (card) card.style.display = 'none';
+
+      await refreshStudio();
+      switchView('studio');
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      $('#loading').classList.remove('active');
+    }
+    return;
+  }
+
+  // Resume Job Button
+  if (event.target.closest('#studio-resume-job-btn')) {
+    const btn = event.target.closest('#studio-resume-job-btn');
+    const jobId = btn.dataset.jobId || studioState.currentJobId;
+    if (!jobId) return;
+
+    try {
+      $('#loading').classList.add('active');
+      await api(`/api/studio/jobs/${encodeURIComponent(jobId)}/resume`, { method: 'POST', body: '{}' });
+      showToast(`Job ${jobId} resumed from last safe checkpoint!`);
+      await refreshStudio(true);
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      $('#loading').classList.remove('active');
+    }
+    return;
+  }
+
   // Job selection in table
   const selectRow = event.target.closest('[data-studio-select-job]');
   if (selectRow) {

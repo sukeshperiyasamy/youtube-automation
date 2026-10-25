@@ -31,6 +31,7 @@ class ProductionAssembler {
 
     return {
       duration,
+      hasVideo: Boolean(videoStream),
       width: videoStream ? Number(videoStream.width) : 0,
       height: videoStream ? Number(videoStream.height) : 0,
       codec: videoStream?.codec_name || 'unknown',

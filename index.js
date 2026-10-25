@@ -517,7 +517,7 @@ class YouTubeAutomationAgent {
       try {
         const [stats, jobs, pipeline, schedule, events, notifications, profile, settings, ideas, analytics, learning, activation, channelStrategy, operatorRuns, readiness, engagement, experiments] = await Promise.all([
           this.db.getStats(),
-          this.db.listGenerationJobs(20),
+          this.db.listGenerationJobs(50),
           this.db.getPipelineOverview(50),
           this.db.getUpcomingSchedule(30),
           this.db.getRecentAutomationEvents(20),
@@ -1980,6 +1980,70 @@ class YouTubeAutomationAgent {
       }
     });
 
+    this.app.post('/api/studio/instruction/interpret', protect, async (req, res) => {
+      try {
+        const { instruction, options } = req.body;
+        const interpretation = await this.productionOrchestrator.instructionInterpreter.interpret(instruction, options);
+        res.json({ success: true, interpretation });
+      } catch (err) {
+        res.status(400).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.post('/api/studio/production/create-from-instruction', protect, async (req, res) => {
+      try {
+        const { instruction, autoStart = true, options = {} } = req.body;
+        const result = await this.productionOrchestrator.createJobFromInstruction(instruction, options);
+        if (autoStart) {
+          if (result.isBatch) {
+            (async () => {
+              for (const child of result.childJobs) {
+                try {
+                  await this.productionOrchestrator.startGeneration(child.id, options);
+                } catch (err) {
+                  this.logger.error('Batch child generation failed for ' + child.id + ':', err);
+                }
+              }
+            })();
+          } else if (result.job) {
+            this.productionOrchestrator.startGeneration(result.job.id, options).catch(err => {
+              this.logger.error('Instruction job generation failed for ' + result.job.id + ':', err);
+            });
+          }
+        }
+        res.status(201).json({ success: true, result });
+      } catch (err) {
+        res.status(400).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.post('/api/studio/jobs/:id/resume', protect, async (req, res) => {
+      try {
+        this.productionOrchestrator.resumeJob(req.params.id, req.body).catch(err => {
+          this.logger.error('Resume failed for ' + req.params.id + ':', err);
+        });
+        res.json({ success: true, message: 'Job resumed from last safe checkpoint.', jobId: req.params.id });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    this.app.get('/api/studio/batches/:batchId', async (req, res) => {
+      try {
+        const rows = await this.db.getAllRows(
+          "SELECT * FROM generation_jobs WHERE details LIKE ? ORDER BY created_at ASC",
+          [`%${req.params.batchId}%`]
+        );
+        const childJobs = rows.map(r => ({
+          ...r,
+          details: JSON.parse(r.details || '{}')
+        }));
+        res.json({ success: true, batchId: req.params.batchId, childJobs });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
     this.app.post('/api/studio/jobs/create', protect, async (req, res) => {
       try {
         const job = await this.productionOrchestrator.createJob(req.body);
@@ -2018,7 +2082,8 @@ class YouTubeAutomationAgent {
         const result = await this.productionOrchestrator.cancelJob(req.params.id);
         res.json(result);
       } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        const status = err.status || (err.message?.toLowerCase().includes('not found') ? 404 : 500);
+        res.status(status).json({ success: false, error: err.message });
       }
     });
 
@@ -2029,7 +2094,8 @@ class YouTubeAutomationAgent {
           this.agents.publishing = new PublishingSchedulingAgent(this.db, this.credentials);
           await this.agents.publishing.initialize();
         }
-        const result = await this.productionOrchestrator.approveAndPublish(req.params.id, this.agents.publishing);
+        const confirmations = req.body || {};
+        const result = await this.productionOrchestrator.approveAndPublish(req.params.id, this.agents.publishing, confirmations);
         res.json(result);
       } catch (err) {
         res.status(err.status || 500).json({ success: false, error: err.message });

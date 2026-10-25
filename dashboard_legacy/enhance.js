@@ -12,8 +12,8 @@
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const MINI_LABELS = {
-    overview: 'Home', operator: 'Operator', pipeline: 'Pipeline',
-    calendar: 'Calendar', analytics: 'Stats', readiness: 'Checks', settings: 'Setup'
+    overview: 'Home', studio: 'Studio', operator: 'Operator', pipeline: 'Pipeline',
+    calendar: 'Calendar', analytics: 'Stats', engagement: 'Audience', readiness: 'Checks', settings: 'Setup'
   };
   function ensureMiniLabels() {
     $$('.nav-item').forEach(item => {
@@ -31,10 +31,12 @@
   /* ---------- 1. View choreography ---------- */
   const VIEW_META = {
     overview: ['OPERATOR OVERVIEW', 'Know what happens next.', 'Overview'],
+    studio: ['AI PROMPT VIDEO STUDIO', 'Prompt to local ComfyUI inference to YouTube.', 'Prompt Studio'],
     operator: ['AUTONOMOUS OPERATOR', 'Give YouTube Automation Agent the strategy.', 'Operator'],
     pipeline: ['CONTENT OPERATIONS', 'From idea to published.', 'Pipeline'],
     calendar: ['EDITORIAL PLANNING', 'Plan before you generate.', 'Calendar'],
     analytics: ['PERFORMANCE', 'Turn results into the next move.', 'Analytics'],
+    engagement: ['AUDIENCE ENGAGEMENT', 'Talk with the people watching.', 'Engagement'],
     readiness: ['PRODUCTION READINESS', 'Verify before autonomy runs.', 'Readiness'],
     settings: ['CHANNEL GUARDRAILS', 'Make every agent sound like you.', 'Setup']
   };
@@ -232,7 +234,7 @@
       return;
     }
     if (chordArmed) {
-      const map = { o: 'overview', p: 'pipeline', c: 'calendar', a: 'analytics', r: 'readiness', s: 'settings', d: 'operator' };
+      const map = { o: 'overview', v: 'studio', p: 'pipeline', c: 'calendar', a: 'analytics', e: 'engagement', r: 'readiness', s: 'settings', d: 'operator' };
       const view = map[event.key.toLowerCase()];
       chordArmed = false;
       clearTimeout(chordTimer);
