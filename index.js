@@ -4,6 +4,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs').promises;
 const { Logger } = require('./utils/logger');
+const { normalizeQualityChecks } = require('./utils/quality-normalizer');
 const { Database } = require('./database/db');
 const { CredentialManager } = require('./utils/credential-manager');
 const { ContentStrategyAgent } = require('./agents/content-strategy-agent');
@@ -863,7 +864,7 @@ class YouTubeAutomationAgent {
         const bundle = await this.db.getProductionBundle(req.params.productionId);
         if (!bundle) return res.status(404).json({ error: 'Content not found' });
         const allowed = {
-          video: bundle.assets?.finalVideo?.path,
+          video: bundle.assets?.finalVideo?.path || bundle.assets?.video?.path,
           thumbnail: bundle.assets?.thumbnail?.path,
           captions: bundle.assets?.captions?.path,
           script: bundle.assets?.script?.originalPath
@@ -1719,10 +1720,25 @@ class YouTubeAutomationAgent {
   }
 
   decorateContentBundle(bundle) {
+    if (!bundle) return null;
     const experiment = bundle.editorData?.packagingExperiment;
     const sceneLabels = new Map((bundle.scenes || []).map(scene => [scene.id, scene.label]));
+    const assets = bundle.assets || {};
+    if (!assets.finalVideo && assets.video) {
+      assets.finalVideo = assets.video;
+    }
+    const targetDuration = Number(
+      bundle.strategy?.targetDuration ||
+      bundle.strategy?.target_duration ||
+      (bundle.script?.scenes || []).reduce((acc, s) => acc + Number(s.duration_seconds || s.duration || 0), 0) ||
+      (bundle.scenes || []).reduce((acc, s) => acc + Number(s.duration || 0), 0) ||
+      bundle.estimated_duration ||
+      0
+    );
     return {
       ...bundle,
+      assets,
+      qualityChecks: normalizeQualityChecks(bundle.qualityChecks, bundle.id, { targetDuration }),
       scenes: (bundle.scenes || []).map(scene => this.scenes
         ? this.scenes.decorateScene(scene, bundle.id)
         : scene),
@@ -1735,7 +1751,7 @@ class YouTubeAutomationAgent {
         }
       })),
       assetUrls: {
-        video: bundle.assets?.finalVideo?.path && !bundle.assets?.finalVideo?.simulated ? `/api/content/${bundle.id}/asset/video` : null,
+        video: (bundle.assets?.finalVideo?.path || bundle.assets?.video?.path) && !(bundle.assets?.finalVideo?.simulated || bundle.assets?.video?.simulated) ? `/api/content/${bundle.id}/asset/video` : null,
         thumbnail: bundle.assets?.thumbnail?.path && !bundle.assets?.thumbnail?.simulated ? `/api/content/${bundle.id}/asset/thumbnail` : null,
         experimentThumbnails: (experiment?.thumbnailVariants || []).map((_variant, index) =>
           `/api/content/${bundle.id}/asset/experiment-thumbnail-${index}`

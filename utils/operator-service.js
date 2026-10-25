@@ -12,8 +12,15 @@ class OperatorService {
     const title = String(production.seo?.title || production.script?.title || '').trim();
     const description = String(production.seo?.description || '').trim();
     const tags = Array.isArray(production.seo?.tags) ? production.seo.tags : [];
-    const script = String(production.script?.fullScript || '').trim();
-    const finalVideo = production.assets?.finalVideo;
+    const script = String(
+      production.script?.fullScript ||
+      production.script?.text ||
+      (Array.isArray(production.script?.scenes)
+        ? production.script.scenes.map(s => [s.visual_prompt, s.narration_text, s.soundscape_prompt].filter(Boolean).join('\n')).join('\n\n')
+        : '') ||
+      ''
+    ).trim();
+    const finalVideo = production.assets?.finalVideo || production.assets?.video;
     const thumbnail = production.assets?.thumbnail;
     const bannedTopics = Array.isArray(profile.bannedTopics) ? profile.bannedTopics : [];
     const combinedText = `${title}\n${description}\n${script}`.toLowerCase();
@@ -53,8 +60,56 @@ class OperatorService {
     }
 
     if (finalVideo?.path && !finalVideo?.simulated) {
-      checks.push(this.check('video_file', await this.fileExists(finalVideo.path),
-        'Final video file exists on disk'));
+      const exists = await this.fileExists(finalVideo.path);
+      checks.push(this.check('video_file', exists,
+        exists ? 'Final video file exists on disk' : 'Final video file is missing on disk', true));
+
+      const targetDuration = Number(
+        production.strategy?.targetDuration ||
+        production.strategy?.target_duration ||
+        production.targetDuration ||
+        (Array.isArray(production.script?.scenes) && production.script.scenes.length ? production.script.scenes.reduce((acc, s) => acc + Number(s.duration_seconds || s.duration || 0), 0) : null) ||
+        (Array.isArray(production.scenes) && production.scenes.length ? production.scenes.reduce((acc, s) => acc + Number(s.duration || 0), 0) : null) ||
+        production.estimated_duration ||
+        0
+      );
+      const actualDuration = Number(finalVideo.duration || 0);
+
+      if (targetDuration > 0) {
+        const minAcceptable = Math.max(3.0, targetDuration * 0.8);
+        const durationPassed = actualDuration >= minAcceptable;
+        checks.push(this.check('duration', durationPassed,
+          durationPassed
+            ? `Duration: ${actualDuration.toFixed(2)}s matches target (${targetDuration}s)`
+            : `Duration shortfall: actual duration ${actualDuration.toFixed(2)}s is below target ${targetDuration}s (min: ${minAcceptable.toFixed(1)}s)`,
+          true
+        ));
+      } else if (finalVideo.duration !== undefined) {
+        const durationPassed = actualDuration >= 3.0;
+        checks.push(this.check('duration', durationPassed,
+          durationPassed
+            ? `Duration: ${actualDuration.toFixed(2)}s is sufficient`
+            : `Duration is too short (${actualDuration.toFixed(2)}s; minimum 3.0s required)`,
+          true
+        ));
+      }
+
+      if (finalVideo.width || finalVideo.height) {
+        const width = Number(finalVideo.width || 0);
+        const height = Number(finalVideo.height || 0);
+        const aspectRatio = String(production.strategy?.aspectRatio || '16:9').trim();
+        const isVertical = aspectRatio === '9:16' || height > width;
+        const validResolution = isVertical
+          ? (width === 1080 && height === 1920) || (width > 0 && height > width)
+          : (width === 1920 && height === 1080) || (width > 0 && width > height);
+
+        checks.push(this.check('resolution', validResolution,
+          validResolution
+            ? `Resolution: ${width}x${height} matches ${aspectRatio} aspect ratio`
+            : `Invalid resolution ${width}x${height} for ${aspectRatio} format`,
+          true
+        ));
+      }
     }
 
     const audio = production.assets?.audio || {};

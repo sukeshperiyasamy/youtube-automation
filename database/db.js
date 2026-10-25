@@ -2,6 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs').promises;
 const { Logger } = require('../utils/logger');
+const { normalizeQualityChecks } = require('../utils/quality-normalizer');
 
 class Database {
   constructor() {
@@ -899,16 +900,29 @@ class Database {
     const scenes = await this.listProductionScenes(productionId);
     const sceneRevisions = scenes.length ? await this.listProductionSceneRevisions(productionId, 50) : [];
     const shorts = await this.listShortClips(productionId);
+    const assets = JSON.parse(row.assets || '{}');
+    if (!assets.finalVideo && assets.video) {
+      assets.finalVideo = assets.video;
+    }
+    const strategy = JSON.parse(row.strategy || '{}');
+    const script = JSON.parse(row.script || '{}');
+    const targetDuration = Number(
+      strategy.targetDuration ||
+      strategy.target_duration ||
+      (script.scenes || []).reduce((acc, s) => acc + Number(s.duration_seconds || s.duration || 0), 0) ||
+      row.estimated_duration ||
+      0
+    );
     return {
       ...row,
-      assets: JSON.parse(row.assets || '{}'),
+      assets,
       timeline: JSON.parse(row.timeline || '{}'),
-      strategy: JSON.parse(row.strategy || '{}'),
-      script: JSON.parse(row.script || '{}'),
+      strategy,
+      script,
       thumbnail: JSON.parse(row.thumbnail || '{}'),
       seo: JSON.parse(row.seo || '{}'),
       editorData: JSON.parse(row.editor_data || '{}'),
-      qualityChecks: JSON.parse(row.quality_checks || '[]'),
+      qualityChecks: normalizeQualityChecks(row.quality_checks, productionId, { targetDuration }),
       schedule: schedule ? { ...schedule, metadata: JSON.parse(schedule.metadata || '{}') } : null,
       provenance: provenance || {
         sources: [], claims: [], containsSyntheticMedia: false, status: 'not_required',
@@ -943,6 +957,16 @@ class Database {
       const script = JSON.parse(row.script || '{}');
       const seo = JSON.parse(row.seo || '{}');
       const assets = JSON.parse(row.assets || '{}');
+      if (!assets.finalVideo && assets.video) {
+        assets.finalVideo = assets.video;
+      }
+      const targetDuration = Number(
+        strategy.targetDuration ||
+        strategy.target_duration ||
+        (script.scenes || []).reduce((acc, s) => acc + Number(s.duration_seconds || s.duration || 0), 0) ||
+        row.estimated_duration ||
+        0
+      );
       return {
         ...row,
         strategy,
@@ -950,7 +974,7 @@ class Database {
         seo,
         assets,
         timeline: JSON.parse(row.timeline || '{}'),
-        qualityChecks: JSON.parse(row.quality_checks || '[]'),
+        qualityChecks: normalizeQualityChecks(row.quality_checks, row.id, { targetDuration }),
         title: seo.title || script.title || strategy.topic || row.id,
         topic: strategy.topic || '',
         hasVideo: Boolean(assets.finalVideo?.path && !assets.finalVideo?.simulated),
@@ -1392,7 +1416,7 @@ class Database {
         productionId,
         review.status || 'needs_review',
         JSON.stringify(review.editorData || {}),
-        JSON.stringify(review.qualityChecks || []),
+        JSON.stringify(normalizeQualityChecks(review.qualityChecks, productionId)),
         review.reviewNotes || null,
         review.reviewedAt || null
       ]

@@ -263,7 +263,9 @@ function renderPipeline(items) {
     return;
   }
   container.innerHTML = filtered.map(item => {
-    const state = item.schedule_status || item.review_status || item.status;
+    const state = (item.review_status === 'needs_review' || item.review_status === 'needs_attention')
+      ? item.review_status
+      : (item.schedule_status || item.review_status || item.status);
     const next = nextAction(item);
     return `<article class="pipeline-item" data-open-content="${escapeHTML(item.id)}">
       <div class="pipeline-title"><strong>${escapeHTML(item.title)}</strong><span>${escapeHTML(item.topic || 'No topic recorded')} · ${formatDate(item.created_at)}</span></div>
@@ -274,9 +276,43 @@ function renderPipeline(items) {
   }).join('');
 }
 
+function normalizeQualityChecks(raw) {
+  if (!raw) return [];
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try { return normalizeQualityChecks(JSON.parse(trimmed)); } catch (_e) { return []; }
+  }
+  if (Array.isArray(raw)) {
+    return raw.filter(c => c && typeof c === 'object').map((c, i) => ({
+      id: c.id || `check_${i + 1}`,
+      passed: Boolean(c.passed),
+      message: c.message || (c.passed ? 'Check passed' : 'Check failed'),
+      blocking: Boolean(c.blocking)
+    }));
+  }
+  if (typeof raw === 'object') {
+    if (Array.isArray(raw.checks)) return normalizeQualityChecks(raw.checks);
+    const list = [];
+    if ('verified' in raw) list.push({ id: 'media_verification', passed: Boolean(raw.verified), message: raw.verified ? 'Media stream and container verification passed' : 'Media verification failed', blocking: true });
+    if (raw.resolution) list.push({ id: 'resolution', passed: true, message: `Video resolution: ${raw.resolution}`, blocking: false });
+    if (raw.duration) list.push({ id: 'duration', passed: Number(raw.duration) > 0, message: `Video duration: ${Number(raw.duration).toFixed(2)}s`, blocking: false });
+    if ('hasAudio' in raw) list.push({ id: 'audio_stream', passed: Boolean(raw.hasAudio), message: raw.hasAudio ? 'Audio stream present' : 'No audio stream detected', blocking: false });
+    if (list.length) return list;
+    return Object.entries(raw).map(([k, v]) => ({
+      id: k,
+      passed: typeof v === 'boolean' ? v : Boolean(v?.passed),
+      message: typeof v === 'object' && v?.message ? v.message : `${k}: ${v ? 'passed' : 'failed'}`,
+      blocking: false
+    }));
+  }
+  return [];
+}
+
 function qualityScore(checks) {
-  if (!Array.isArray(checks) || !checks.length) return 0;
-  return Math.round((checks.filter(check => check.passed).length / checks.length) * 100);
+  const list = Array.isArray(checks) ? checks : normalizeQualityChecks(checks);
+  if (!list.length) return 0;
+  return Math.round((list.filter(check => check.passed).length / list.length) * 100);
 }
 
 function nextAction(item) {
@@ -1049,13 +1085,14 @@ async function openContent(productionId) {
     const experiment = data.packagingExperiment;
     const selectedTitleVariant = Number(data.selectedTitleVariant || 0);
     const selectedThumbnailVariant = Number(data.selectedThumbnailVariant || 0);
+    const checks = Array.isArray(item.qualityChecks) ? item.qualityChecks : normalizeQualityChecks(item.qualityChecks);
     $('#content-detail').innerHTML = `
       <div class="dialog-heading"><div><p class="eyebrow">CONTENT REVIEW</p><h2>${escapeHTML(title)}</h2><div class="meta-line">${statusChip(item.schedule?.status || item.review_status || item.status)} · Quality ${qualityScore(item.qualityChecks)}%</div></div><button type="button" class="close-button" data-close>×</button></div>
       <form id="content-review-form" class="editor content-review-editor">
         <div class="content-layout">
           <div>
             <div class="preview">${item.assetUrls.video ? `<video controls preload="metadata" poster="${item.assetUrls.thumbnail || ''}"><source src="${item.assetUrls.video}" type="video/mp4"></video>` : item.assetUrls.thumbnail ? `<img src="${item.assetUrls.thumbnail}" alt="Generated thumbnail">` : '<div class="preview-placeholder">No playable preview was produced.</div>'}</div>
-            <div class="quality-grid">${(item.qualityChecks || []).map(check => `<div class="quality-check ${check.passed ? 'pass' : 'fail'}">${check.passed ? '✓' : '×'} ${escapeHTML(check.message)}</div>`).join('') || '<div class="quality-check">No quality results recorded.</div>'}</div>
+            <div class="quality-grid">${checks.map(check => `<div class="quality-check ${check.passed ? 'pass' : 'fail'}">${check.passed ? '✓' : '✕'} ${escapeHTML(check.message)}</div>`).join('') || '<div class="quality-check">No quality results recorded.</div>'}</div>
             ${item.review_notes ? `<p class="callout">${escapeHTML(item.review_notes)}</p>` : ''}
           </div>
           <div class="editor">

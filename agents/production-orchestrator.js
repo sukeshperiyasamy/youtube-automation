@@ -461,7 +461,12 @@ class ProductionOrchestrator {
       [
         productionId,
         JSON.stringify(plan?.youtube_metadata || {}),
-        JSON.stringify({ duration: probe.duration, resolution: `${probe.width}x${probe.height}`, verified: true })
+        JSON.stringify([
+          { id: 'media_verification', passed: Boolean(probe && probe.duration > 0), message: 'Master video container and streams verified on disk', blocking: true },
+          { id: 'resolution', passed: probe?.width === 1920 && probe?.height === 1080, message: `Resolution: ${probe?.width}x${probe?.height} (16:9 normalized)`, blocking: true },
+          { id: 'duration', passed: Boolean(probe?.duration && probe.duration > 0), message: `Duration: ${probe?.duration ? probe.duration.toFixed(2) + 's' : '0s'}`, blocking: false },
+          { id: 'audio_stream', passed: Boolean(probe?.hasAudio), message: probe?.hasAudio ? `Audio: ${probe.audioCodec} stereo` : 'Silent audio stream', blocking: false }
+        ])
       ]
     );
 
